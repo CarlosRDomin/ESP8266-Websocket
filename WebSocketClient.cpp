@@ -65,7 +65,7 @@ bool WebSocketClient::analyzeRequest() {
 
 #ifdef DEBUGGING
     Serial.println(F("Sending websocket upgrade headers"));
-#endif    
+#endif
 
     socket_client->print(F("GET "));
     socket_client->print(path);
@@ -74,7 +74,7 @@ bool WebSocketClient::analyzeRequest() {
     socket_client->print(F("Connection: Upgrade\r\n"));
     socket_client->print(F("Host: "));
     socket_client->print(host);
-    socket_client->print(CRLF); 
+    socket_client->print(CRLF);
     socket_client->print(F("Sec-WebSocket-Key: "));
     socket_client->print(key);
     socket_client->print(CRLF);
@@ -86,7 +86,7 @@ bool WebSocketClient::analyzeRequest() {
 
 #ifdef DEBUGGING
     Serial.println(F("Analyzing response headers"));
-#endif    
+#endif
 
     while (socket_client->connected() && !socket_client->available()) {
         delay(100);
@@ -107,7 +107,7 @@ bool WebSocketClient::analyzeRequest() {
             } else if (temp.startsWith("Sec-WebSocket-Accept: ")) {
                 serverKey = temp.substring(22,temp.length() - 2); // Don't save last CR+LF
             }
-            temp = "";		
+            temp = "";
         }
 
         if (!socket_client->available()) {
@@ -123,7 +123,7 @@ bool WebSocketClient::analyzeRequest() {
     SHA1Context sha;
     int err;
     uint8_t Message_Digest[20];
-    
+
     err = SHA1Reset(&sha);
     err = SHA1Input(&sha, reinterpret_cast<const uint8_t *>(key.c_str()), key.length());
     err = SHA1Result(&sha, Message_Digest);
@@ -153,7 +153,7 @@ bool WebSocketClient::handleStream(String& data, uint8_t *opcode) {
     if (!socket_client->connected() || !socket_client->available())
     {
         return false;
-    }      
+    }
 
     msgtype = timedRead();
     if (!socket_client->connected()) {
@@ -179,11 +179,11 @@ bool WebSocketClient::handleStream(String& data, uint8_t *opcode) {
         if (!socket_client->connected()) {
             return false;
         }
-            
+
         length |= timedRead();
         if (!socket_client->connected()) {
             return false;
-        }   
+        }
 
     } else if (length == WS_SIZE64) {
 #ifdef DEBUGGING
@@ -215,14 +215,14 @@ bool WebSocketClient::handleStream(String& data, uint8_t *opcode) {
             return false;
         }
     }
-        
+
     data = "";
-        
+
     if (opcode != NULL)
     {
       *opcode = msgtype & ~WS_FIN;
     }
-                
+
     if (hasMask) {
         for (i=0; i<length; ++i) {
             data += (char) (timedRead() ^ mask[i % 4]);
@@ -236,9 +236,9 @@ bool WebSocketClient::handleStream(String& data, uint8_t *opcode) {
             if (!socket_client->connected()) {
                 return false;
             }
-        }            
+        }
     }
-    
+
     return true;
 }
 
@@ -247,9 +247,9 @@ void WebSocketClient::disconnectStream() {
     Serial.println(F("Terminating socket"));
 #endif
     // Should send 0x8700 to server to tell it I'm quitting here.
-    socket_client->write((uint8_t) 0x87);
-    socket_client->write((uint8_t) 0x00);
-    
+    uint8_t quitCode[] = {0x87, 0x00};
+    socket_client->write(quitCode, sizeof(quitCode));
+
     socket_client->flush();
     delay(10);
     socket_client->stop();
@@ -257,72 +257,60 @@ void WebSocketClient::disconnectStream() {
 
 bool WebSocketClient::getData(String& data, uint8_t *opcode) {
     return handleStream(data, opcode);
-}    
+}
 
-void WebSocketClient::sendData(const char *str, uint8_t opcode) {
+void WebSocketClient::sendData(uint8_t *buf, uint16_t len, uint8_t opcode) {
 #ifdef DEBUGGING
     Serial.print(F("Sending data: "));
     Serial.println(str);
 #endif
     if (socket_client->connected()) {
-        sendEncodedData(str, opcode);       
+        sendEncodedData((const uint8_t*)buf, len, opcode);
     }
 }
 
+void WebSocketClient::sendData(char *str, uint8_t opcode) {
+    sendData((uint8_t*)str, strlen(str), opcode);
+}
+
 void WebSocketClient::sendData(String str, uint8_t opcode) {
-#ifdef DEBUGGING
-    Serial.print(F("Sending data: "));
-    Serial.println(str);
-#endif
-    if (socket_client->connected()) {
-        sendEncodedData(str, opcode);
-    }
+    sendData(str.c_str(), opcode);
 }
 
 int WebSocketClient::timedRead() {
   while (!socket_client->available()) {
-    delay(20);  
+    delay(20);
   }
 
   return socket_client->read();
 }
 
-void WebSocketClient::sendEncodedData(char *str, uint8_t opcode) {
-    uint8_t mask[4];
-    int size = strlen(str);
+void WebSocketClient::sendEncodedData(const uint8_t *buf, uint16_t len, uint8_t opcode) {
+    uint8_t *outBuf = new uint8_t[8+len];
+    uint8_t outBufPos = 0;
 
     // Opcode; final fragment
-    socket_client->write(opcode | WS_FIN);
+    outBuf[outBufPos++] = (opcode | WS_FIN);
 
     // NOTE: no support for > 16-bit sized messages
-    if (size > 125) {
-        socket_client->write(WS_SIZE16 | WS_MASK);
-        socket_client->write((uint8_t) (size >> 8));
-        socket_client->write((uint8_t) (size & 0xFF));
+    if (len > 125) {
+        outBuf[outBufPos++] = (WS_SIZE16 | WS_MASK);
+        outBuf[outBufPos++] = ((uint8_t) (len >> 8));
+        outBuf[outBufPos++] = ((uint8_t) (len & 0xFF));
     } else {
-        socket_client->write((uint8_t) size | WS_MASK);
+        outBuf[outBufPos++] = ((uint8_t) len | WS_MASK);
     }
 
-    mask[0] = random(0, 256);
-    mask[1] = random(0, 256);
-    mask[2] = random(0, 256);
-    mask[3] = random(0, 256);
-    
-    socket_client->write(mask[0]);
-    socket_client->write(mask[1]);
-    socket_client->write(mask[2]);
-    socket_client->write(mask[3]);
-     
-    for (int i=0; i<size; ++i) {
-        socket_client->write(str[i] ^ mask[i % 4]);
+    uint8_t maskOffs = outBufPos;   // outBuf[outBufPos+i] represents mask[i], with i = 0...3
+    for (uint8_t maskInd=0; maskInd<4; ++maskInd) {
+        outBuf[outBufPos++] = random(0, 256);
     }
-}
+    //socket_client->write(outBuf, outBufPos);
 
-void WebSocketClient::sendEncodedData(String str, uint8_t opcode) {
-    int size = str.length() + 1;
-    char cstr[size];
+    for (int i=0; i<len; ++i) {
+        outBuf[outBufPos++] = buf[i] ^ outBuf[maskOffs + (i & 3)];
+    }
 
-    str.toCharArray(cstr, size);
-
-    sendEncodedData(cstr, opcode);
+    socket_client->write(outBuf, outBufPos);    // Send the whole output buffer all at once
+    delete[] outBuf;    // Don't forget to free memory!
 }
